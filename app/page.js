@@ -12,6 +12,7 @@ export default function App() {
   const [fixtures, setFixtures] = useState([]);
   const [predictions, setPredictions] = useState({});
   const [officialRosters, setOfficialRosters] = useState({});
+  const [teamLogos, setTeamLogos] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [user, setUser] = useState(null);
@@ -25,6 +26,7 @@ export default function App() {
   const [isSignUp, setIsSignUp] = useState(false);
   const [authError, setAuthError] = useState('');
 
+  // 1. Auth Listener
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => setUser(user));
 
@@ -32,30 +34,67 @@ export default function App() {
       setUser(session?.user ?? null);
     });
 
-    // 1. Fetch official Premier League player rosters from our API route
-    async function fetchPlayers() {
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // 2. Load API data (Players + Logos) & Supabase Fixtures
+  useEffect(() => {
+    async function fetchPlayersAndLogos() {
       try {
         const res = await fetch('/api/players');
         const data = await res.json();
         if (data && !data.error) {
-          setOfficialRosters(data);
+          setOfficialRosters(data.players || data);
+          if (data.logos) setTeamLogos(data.logos);
         }
       } catch (err) {
-        console.error('Failed to load official rosters:', err);
+        console.error('Failed to load rosters and logos:', err);
       }
     }
-    fetchPlayers();
+    fetchPlayersAndLogos();
 
-    // 2. Fetch Gameweek fixtures from Supabase
-    async function loadData() {
+    async function loadFixtures() {
       const { data } = await supabase.from('fixtures').select('*').order('id');
       if (data) setFixtures(data);
       setLoading(false);
     }
-    loadData();
-
-    return () => subscription.unsubscribe();
+    loadFixtures();
   }, []);
+
+  // 3. Load saved predictions whenever user logs in
+  useEffect(() => {
+    async function loadUserPredictions() {
+      if (!user) {
+        setPredictions({});
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('predictions')
+        .select('*')
+        .eq('user_id', user.id);
+
+      if (error) {
+        console.error('Error fetching saved predictions:', error.message);
+        return;
+      }
+
+      if (data) {
+        const formatted = {};
+        data.forEach((p) => {
+          formatted[p.fixture_id] = {
+            outcome: p.pred_outcome,
+            homeGoals: p.pred_home_goals,
+            awayGoals: p.pred_away_goals,
+            motm: p.pred_motm,
+          };
+        });
+        setPredictions(formatted);
+      }
+    }
+
+    loadUserPredictions();
+  }, [user]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
@@ -76,7 +115,10 @@ export default function App() {
     }
   };
 
-  const handleSignOut = () => supabase.auth.signOut();
+  const handleSignOut = () => {
+    supabase.auth.signOut();
+    setPredictions({});
+  };
 
   const handleOutcomeChange = (id, outcome) => {
     setPredictions((prev) => ({
@@ -197,9 +239,11 @@ export default function App() {
 
             const activeTab = motmTab[m.id] || 'home';
 
-            // Auto-populated player arrays based on team names
             const homePlayers = officialRosters[m.home_team] || m.home_players || [];
             const awayPlayers = officialRosters[m.away_team] || m.away_players || [];
+
+            const homeLogo = teamLogos[m.home_team];
+            const awayLogo = teamLogos[m.away_team];
 
             return (
               <div key={m.id} className="bg-slate-800/60 border border-slate-700/80 p-5 rounded-xl space-y-4 shadow-lg flex flex-col justify-between">
@@ -219,11 +263,12 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => handleOutcomeChange(m.id, 'HOME_WIN')}
-                      className={`py-1.5 rounded text-xs font-bold transition truncate px-1 ${
+                      className={`py-1.5 rounded text-xs font-bold transition flex items-center justify-center space-x-1 px-1 ${
                         outcome === 'HOME_WIN' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-300 hover:bg-slate-800'
                       }`}
                     >
-                      {m.home_team} Win
+                      {homeLogo && <img src={homeLogo} alt="" className="w-4 h-4 object-contain" />}
+                      <span className="truncate">{m.home_team}</span>
                     </button>
                     <button
                       type="button"
@@ -232,16 +277,17 @@ export default function App() {
                         outcome === 'DRAW' ? 'bg-amber-400 text-slate-950 shadow' : 'text-slate-300 hover:bg-slate-800'
                       }`}
                     >
-                      Tie / Draw
+                      Draw
                     </button>
                     <button
                       type="button"
                       onClick={() => handleOutcomeChange(m.id, 'AWAY_WIN')}
-                      className={`py-1.5 rounded text-xs font-bold transition truncate px-1 ${
+                      className={`py-1.5 rounded text-xs font-bold transition flex items-center justify-center space-x-1 px-1 ${
                         outcome === 'AWAY_WIN' ? 'bg-emerald-500 text-slate-950 shadow' : 'text-slate-300 hover:bg-slate-800'
                       }`}
                     >
-                      {m.away_team} Win
+                      {awayLogo && <img src={awayLogo} alt="" className="w-4 h-4 object-contain" />}
+                      <span className="truncate">{m.away_team}</span>
                     </button>
                   </div>
                 </div>
@@ -250,7 +296,14 @@ export default function App() {
                 <div className="space-y-1">
                   <label className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">2. Exact Score</label>
                   <div className="flex justify-between items-center font-bold text-sm bg-slate-900/50 p-2 rounded-lg border border-slate-700/40">
-                    <span className="w-1/3 text-right truncate text-xs">{m.home_team}</span>
+                    
+                    {/* Home Team Label + Badge */}
+                    <div className="w-1/3 flex items-center justify-end space-x-1.5">
+                      <span className="truncate text-xs text-right">{m.home_team}</span>
+                      {homeLogo && <img src={homeLogo} alt={m.home_team} className="w-5 h-5 object-contain flex-shrink-0" />}
+                    </div>
+
+                    {/* Inputs */}
                     <div className="flex items-center space-x-1.5 mx-2">
                       <input
                         type="number"
@@ -270,7 +323,12 @@ export default function App() {
                         onChange={(e) => handleInputChange(m.id, 'awayGoals', e.target.value)}
                       />
                     </div>
-                    <span className="w-1/3 text-left truncate text-xs">{m.away_team}</span>
+
+                    {/* Away Team Label + Badge */}
+                    <div className="w-1/3 flex items-center justify-start space-x-1.5">
+                      {awayLogo && <img src={awayLogo} alt={m.away_team} className="w-5 h-5 object-contain flex-shrink-0" />}
+                      <span className="truncate text-xs text-left">{m.away_team}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -278,29 +336,31 @@ export default function App() {
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">3. Man of the Match</label>
                   
-                  {/* Two Tabs */}
+                  {/* Two Tabs with Badges */}
                   <div className="flex bg-slate-900 p-0.5 rounded-lg border border-slate-700/60 text-xs">
                     <button
                       type="button"
                       onClick={() => setFixtureMotmTab(m.id, 'home')}
-                      className={`flex-1 py-1 rounded font-bold text-center transition truncate px-1 ${
+                      className={`flex-1 py-1 rounded font-bold transition flex items-center justify-center space-x-1 px-1 ${
                         activeTab === 'home' ? 'bg-slate-700 text-amber-400' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
-                      {m.home_team}
+                      {homeLogo && <img src={homeLogo} alt="" className="w-3.5 h-3.5 object-contain" />}
+                      <span className="truncate">{m.home_team}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setFixtureMotmTab(m.id, 'away')}
-                      className={`flex-1 py-1 rounded font-bold text-center transition truncate px-1 ${
+                      className={`flex-1 py-1 rounded font-bold transition flex items-center justify-center space-x-1 px-1 ${
                         activeTab === 'away' ? 'bg-slate-700 text-amber-400' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
-                      {m.away_team}
+                      {awayLogo && <img src={awayLogo} alt="" className="w-3.5 h-3.5 object-contain" />}
+                      <span className="truncate">{m.away_team}</span>
                     </button>
                   </div>
 
-                  {/* Dynamic Dropdown populated by Premier League API */}
+                  {/* Player Dropdown */}
                   <select
                     value={motm}
                     onChange={(e) => handleInputChange(m.id, 'motm', e.target.value)}
@@ -315,12 +375,12 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* Live Selection Visual Summary */}
+                {/* Live Selection Summary */}
                 <div className="bg-slate-900/90 border border-amber-400/20 rounded-lg p-2.5 text-center">
                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-0.5">Your Pick</span>
                   {outcome || homeGoals !== '' || awayGoals !== '' || motm ? (
                     <div className="text-xs font-semibold text-amber-400 flex items-center justify-center space-x-2">
-                      <span>{outcome ? (outcome === 'HOME_WIN' ? `${m.home_team} Win` : outcome === 'AWAY_WIN' ? `${m.away_team} Win` : 'Tie') : 'No Result'}</span>
+                      <span>{outcome ? (outcome === 'HOME_WIN' ? `${m.home_team} Win` : outcome === 'AWAY_WIN' ? `${m.away_team} Win` : 'Draw') : 'No Result'}</span>
                       <span>•</span>
                       <span>{homeGoals !== '' && awayGoals !== '' ? `${homeGoals} - ${awayGoals}` : 'No Score'}</span>
                       {motm && (
