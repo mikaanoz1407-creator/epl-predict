@@ -1,30 +1,38 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-// Use Service Role Key for administrative bulk writes if available, or Anon Key if RLS permits
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+// Force dynamic execution to bypass Next.js static caching
+export const dynamic = 'force-dynamic';
 
-export async function GET(request) {
+// Initialize Supabase client using Service Role Key to bypass RLS policies
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+export async function GET() {
   const apiKey = process.env.FOOTBALL_DATA_API_KEY;
 
   if (!apiKey) {
     return NextResponse.json(
-      { error: 'FOOTBALL_DATA_API_KEY environment variable is missing' },
+      { error: 'FOOTBALL_DATA_API_KEY environment variable is missing.' },
       { status: 500 }
     );
   }
 
   try {
-    // 1. Fetch Premier League matches (PL competition code = 2021)
-    const apiRes = await fetch('https://api.football-data.org/v4/competitions/PL/matches', {
-      headers: {
-        'X-Auth-Token': apiKey,
-      },
-      next: { revalidate: 0 }, // Prevent caching
-    });
+    // 1. Fetch Premier League matches (PL) from football-data.org
+    const apiRes = await fetch(
+      'https://api.football-data.org/v4/competitions/PL/matches',
+      {
+        headers: {
+          'X-Auth-Token': apiKey,
+        },
+        cache: 'no-store',
+      }
+    );
 
     if (!apiRes.ok) {
       const errText = await apiRes.text();
@@ -38,10 +46,13 @@ export async function GET(request) {
     const matches = data.matches || [];
 
     if (matches.length === 0) {
-      return NextResponse.json({ message: 'No matches returned from API' });
+      return NextResponse.json(
+        { message: 'No matches returned from Football Data API.' },
+        { status: 404 }
+      );
     }
 
-    // 2. Format matches for Supabase fixtures schema
+    // 2. Map API data to match your Supabase fixtures schema
     const fixtureRecords = matches.map((m) => ({
       id: m.id,
       gameweek: m.matchday,
@@ -53,13 +64,16 @@ export async function GET(request) {
       final_away_goals: m.score?.fullTime?.away ?? null,
     }));
 
-    // 3. Upsert records into Supabase in bulk (updates existing, inserts new)
-    const { data: inserted, error: dbError } = await supabase
+    // 3. Upsert records into Supabase in bulk (inserts new, updates existing)
+    const { error: dbError } = await supabase
       .from('fixtures')
       .upsert(fixtureRecords, { onConflict: 'id' });
 
     if (dbError) {
-      return NextResponse.json({ error: dbError.message }, { status: 500 });
+      return NextResponse.json(
+        { error: 'Supabase DB Error', details: dbError.message },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({
@@ -68,6 +82,9 @@ export async function GET(request) {
       message: `Successfully synced ${fixtureRecords.length} fixtures across all gameweeks!`,
     });
   } catch (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error', details: error.message },
+      { status: 500 }
+    );
   }
 }
