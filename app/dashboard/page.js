@@ -13,18 +13,23 @@ export default function DashboardPage() {
   const [fixtures, setFixtures] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  // Fetch fixtures specifically for the selected Gameweek
   useEffect(() => {
     async function fetchGameweekFixtures() {
       setLoading(true);
+
+      // Force numerical comparison to prevent data type mismatches
+      const gwNumber = Number(currentGameweek);
+
       const { data, error } = await supabase
         .from('fixtures')
         .select('*')
-        .eq('gameweek', currentGameweek)
+        .eq('gameweek', gwNumber)
         .order('match_date', { ascending: true });
 
-      if (!error && data) {
-        setFixtures(data);
+      if (error) {
+        console.error('Supabase Query Error:', error.message);
+      } else {
+        setFixtures(data || []);
       }
       setLoading(false);
     }
@@ -32,21 +37,12 @@ export default function DashboardPage() {
     fetchGameweekFixtures();
   }, [currentGameweek]);
 
-  // Carousel navigation handlers
-  const handlePrev = () => {
-    if (currentGameweek > 1) setCurrentGameweek((prev) => prev - 1);
-  };
-
-  const handleNext = () => {
-    if (currentGameweek < 38) setCurrentGameweek((prev) => prev + 1);
-  };
-
   return (
     <div className="max-w-4xl mx-auto p-4 space-y-6">
-      {/* GAMEWEEK CAROUSEL CONTROLLER */}
-      <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-4 rounded-xl shadow-md text-white">
+      {/* GAMEWEEK NAVIGATION CAROUSEL */}
+      <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-4 rounded-xl text-white shadow-md">
         <button
-          onClick={handlePrev}
+          onClick={() => setCurrentGameweek((prev) => Math.max(1, prev - 1))}
           disabled={currentGameweek === 1}
           className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg font-bold text-sm transition"
         >
@@ -60,7 +56,7 @@ export default function DashboardPage() {
           <select
             value={currentGameweek}
             onChange={(e) => setCurrentGameweek(Number(e.target.value))}
-            className="bg-slate-800 text-white font-semibold text-sm rounded-md px-3 py-1.5 border border-slate-700 focus:outline-none"
+            className="bg-slate-800 text-amber-400 font-bold text-sm rounded-md px-3 py-1.5 border border-slate-700 focus:outline-none"
           >
             {Array.from({ length: 38 }, (_, i) => i + 1).map((gw) => (
               <option key={gw} value={gw}>
@@ -71,7 +67,7 @@ export default function DashboardPage() {
         </div>
 
         <button
-          onClick={handleNext}
+          onClick={() => setCurrentGameweek((prev) => Math.min(38, prev + 1))}
           disabled={currentGameweek === 38}
           className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg font-bold text-sm transition"
         >
@@ -79,14 +75,14 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* FIXTURES LIST FOR ACTIVE GAMEWEEK */}
+      {/* FIXTURE GRID */}
       {loading ? (
         <div className="text-center py-12 text-slate-400 font-medium">
           Loading Gameweek {currentGameweek} fixtures...
         </div>
       ) : fixtures.length === 0 ? (
-        <div className="text-center py-12 text-slate-400">
-          No matches scheduled for Gameweek {currentGameweek}.
+        <div className="text-center py-12 text-slate-400 bg-slate-900/50 rounded-lg border border-slate-800">
+          No fixtures found for Gameweek {currentGameweek}.
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
@@ -96,7 +92,7 @@ export default function DashboardPage() {
               className="bg-slate-900 border border-slate-800 p-4 rounded-lg flex items-center justify-between text-white shadow"
             >
               <div className="flex-1 font-semibold text-right">{fixture.home_team}</div>
-              <div className="px-4 py-1 text-xs font-bold text-amber-400 bg-slate-800 rounded mx-2">
+              <div className="px-3 py-1 text-xs font-bold text-amber-400 bg-slate-800 rounded mx-3">
                 {fixture.status === 'FINISHED'
                   ? `${fixture.final_home_goals ?? 0} - ${fixture.final_away_goals ?? 0}`
                   : 'VS'}
